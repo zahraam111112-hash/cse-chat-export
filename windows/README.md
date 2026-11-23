@@ -5,11 +5,11 @@ dependencies, Chromium, and a launcher. Nothing is installed system-wide and
 no administrator rights are needed.
 
 ```
-start.cmd                  double-click entry point
-windows\start.ps1          picks the interpreter and runs the app
-windows\desktop.py         serves on 127.0.0.1 and opens the browser
-python\python.exe          bundled interpreter, dependencies and Chromium
-app\                       the application
+start.cmd            double-click entry point
+windows\start.ps1    picks the interpreter and runs the app
+windows\desktop.py   serves on 127.0.0.1 and opens the browser
+python\python.exe    bundled interpreter, dependencies and Chromium
+app\                 the application
 ```
 
 `start.cmd` also works in a plain developer checkout: it falls back to `.venv\`
