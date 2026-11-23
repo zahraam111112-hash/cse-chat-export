@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Local runtime state (SQLite jobs/users)
+data/
+
+# Rendered scratch output used while checking the .docx layout
+_*.docx
+_*.json
+
+# Local editor/agent state, never part of the project
+.claude/
