@@ -1,0 +1,18 @@
+# Shell scripts run on Linux and fail there with CRLF ("/usr/bin/env: bash\r"):
+# the updater runs unattended from a timer, so this is enforced on checkout.
+*.sh text eol=lf
+
+# Windows release artifacts. These are shipped to users as files, so their
+# endings have to be right on disk, not just in the editor.
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.iss   text eol=crlf
+
+*.py    text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
