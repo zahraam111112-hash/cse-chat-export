@@ -107,11 +107,13 @@ All settings are environment variables.
 | `CSE_WORKERS` | `3` | Concurrent Chromium extractions |
 | `CSE_AUTH_USER` / `CSE_AUTH_PASS` | unset | HTTP Basic wall over the whole dashboard |
 | `CSE_PUBLIC` | unset | `1` = open to anonymous visitors (see below) |
-| `CSE_RATE_MAX` | `20` | Links accepted per address per `CSE_WINDOW` (60 s) |
+| `CSE_RATE_MAX` | `20` | Links accepted per address per rolling 60 s window |
 | `CSE_MAX_QUEUE` | `60` | Queued jobs before new requests get `503` |
+| `CSE_DB` | `data/app.db` | SQLite file; point it elsewhere to keep state off the checkout |
+| `CSE_VACUUM` | `1` | `0` disables the periodic SQLite `VACUUM` |
 | `TELEGRAM_BOT_TOKEN` | unset | Enables the bot |
 | `TELEGRAM_CHAT_ID` | unset | Comma-separated chat ids allowed to use the bot |
-| `CSE_PROXY` | unset | HTTP proxy for the extractor and the bot |
+| `CSE_PROXY` | unset | HTTP proxy for the extractor and the bot (`HTTPS_PROXY` also works) |
 
 ### Three ways to run it
 

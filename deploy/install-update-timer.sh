@@ -3,7 +3,7 @@
 # Run as the app user after the clone in setup-service.sh exists.
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-$HOME/cse-repo/chatgpt-share-export}"
+APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 UNIT_DIR="$HOME/.config/systemd/user"
 
 echo "==> app dir: $APP_DIR"

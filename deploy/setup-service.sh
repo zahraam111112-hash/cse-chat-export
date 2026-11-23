@@ -4,7 +4,9 @@
 # Tokens are read from the environment or from ~/.config/chatgpt-share-export.env
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-$HOME/chatgpt-share-export}"
+# Default to whatever checkout this script lives in, so the clone can be
+# anywhere (~/cse-repo, ~/apps/cse, …) without editing the script.
+APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PORT="${PORT:-8098}"
 ENV_FILE="$HOME/.config/chatgpt-share-export.env"
 UNIT_DIR="$HOME/.config/systemd/user"

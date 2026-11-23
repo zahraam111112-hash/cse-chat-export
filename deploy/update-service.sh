@@ -7,7 +7,7 @@
 # is never touched, so a hard reset to origin/main only ever changes code.
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-$HOME/cse-repo/chatgpt-share-export}"
+APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BRANCH="${BRANCH:-main}"
 SERVICES="${SERVICES:-chatgpt-share-export.service chatgpt-share-export-bot.service}"
 HEALTH="${HEALTH:-http://127.0.0.1:8098/healthz}"
