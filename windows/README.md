@@ -8,7 +8,7 @@ no administrator rights are needed.
 start.cmd                  double-click entry point
 windows\start.ps1          picks the interpreter and runs the app
 windows\desktop.py         serves on 127.0.0.1 and opens the browser
-python\Scripts\python.exe  bundled runtime, dependencies and Chromium
+python\python.exe          bundled interpreter, dependencies and Chromium
 app\                       the application
 ```
 
@@ -47,5 +47,5 @@ it stays a foreground process. From the install folder:
 ```powershell
 $env:TELEGRAM_BOT_TOKEN = "123456:ABC..."
 $env:TELEGRAM_CHAT_ID   = "your-chat-id"
-python\Scripts\python.exe -I run_bot.py
+python\python.exe -I run_bot.py
 ```

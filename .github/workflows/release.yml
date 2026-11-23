@@ -44,17 +44,32 @@ jobs:
           Copy-Item app, windows, tests -Destination $App -Recurse
           Copy-Item run.py, run_bot.py, requirements.txt, README.md, start.cmd -Destination $App
 
-          # A short wheel cache too: pip unpacks there, and the paths inside
-          # some wheels are already long.
-          python -I -m pip download -r requirements.txt -d C:\cse-wheels --only-binary=:all:
-          python -I -m venv "$App\python"
-          & "$App\python\Scripts\python.exe" -I -m pip install --no-index `
-            --find-links C:\cse-wheels -r requirements.txt
+          # An embeddable interpreter, not a venv. A venv's python.exe is a
+          # redirector to the base interpreter it was created from, so it works
+          # on the build machine and nowhere else; the embeddable build is a
+          # self-contained python.exe that can be moved.
+          $Py = "$App\python"
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" `
+            -OutFile "$env:TEMP\py-embed.zip"
+          Expand-Archive -Path "$env:TEMP\py-embed.zip" -DestinationPath $Py
 
-          # PLAYWRIGHT_BROWSERS_PATH=0 puts Chromium inside the venv instead of
-          # %LOCALAPPDATA%, so it travels with the folder.
+          # The embeddable build starts with no site-packages and no pip; the
+          # ._pth file is what enables both.
+          Set-Content "$Py\python312._pth" @(
+            "python312.zip",
+            ".",
+            "Lib\site-packages",
+            "import site"
+          )
+
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\get-pip.py"
+          & "$Py\python.exe" "$env:TEMP\get-pip.py" --no-warn-script-location
+          & "$Py\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+
+          # PLAYWRIGHT_BROWSERS_PATH=0 puts Chromium inside site-packages, which
+          # is relative to the interpreter, so it travels with the folder.
           $env:PLAYWRIGHT_BROWSERS_PATH = "0"
-          & "$App\python\Scripts\python.exe" -m playwright install chromium
+          & "$Py\python.exe" -m playwright install chromium
 
       - name: Package
         shell: pwsh
@@ -70,8 +85,13 @@ jobs:
           $Iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $Iscc)) { throw "ISCC.exe not found at $Iscc" }
 
+          # The tag is the source of truth for the version Add/Remove Programs
+          # shows; a manual run falls back to the script's default.
+          $Version = "1.0.0"
+          if ($env:GITHUB_REF_NAME -match '^v(\d+\.\d+\.\d+)$') { $Version = $Matches[1] }
+
           New-Item -ItemType Directory -Force -Path "dist" | Out-Null
-          & $Iscc "/DSourceRoot=$App" "/O$PWD\dist" "windows\installer.iss"
+          & $Iscc "/DSourceRoot=$App" "/DAppVersion=$Version" "/O$PWD\dist" "windows\installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
           if (-not (Test-Path "dist\ChatGPT-Share-Exporter-Setup.exe")) {
             throw "Inno Setup produced no installer"

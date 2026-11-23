@@ -12,24 +12,24 @@ $Here       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root       = Split-Path -Parent $Here
 $PythonExe  = $null
 
-# A venv keeps the interpreter in Scripts\, never at its root.
-$Bundled = Join-Path $Root "python\Scripts\python.exe"
+# The release bundles an embeddable interpreter at python\python.exe; a venv
+# keeps its own under Scripts\.
+$Bundled = Join-Path $Root "python\python.exe"
 $Venv    = Join-Path $Root ".venv\Scripts\python.exe"
 
 if (Test-Path $Bundled) {
     $PythonExe = $Bundled
 } elseif (Test-Path $Venv) {
-    # A bundled runtime carries its own site-packages, so --isolated would hide
-    # them; only the system interpreter is run with -I.
     $PythonExe = $Venv
 } else {
+    $LauncherArgs = @()
     foreach ($Candidate in @("py", "python")) {
         $Cmd = Get-Command $Candidate -ErrorAction SilentlyContinue
         if ($Cmd) {
             & $Cmd.Source -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
             if ($LASTEXITCODE -eq 0) {
-                if ($Candidate -eq "py") { $PythonExe = $Cmd.Source; $LauncherArgs = @("-3") }
-                else                     { $PythonExe = $Cmd.Source; $LauncherArgs = @() }
+                $PythonExe = $Cmd.Source
+                if ($Candidate -eq "py") { $LauncherArgs = @("-3") }
                 break
             }
         }
@@ -43,10 +43,11 @@ if (-not $PythonExe) {
     exit 1
 }
 
-# The bundled runtime behaves exactly like an installed one; the system one is
-# run isolated so a stray module in the working directory cannot shadow ours.
-if ($PythonExe -eq $Bundled) { $Isolated = @() } else { $Isolated = @("-I") }
-$AllArgs = @() + $Isolated + @((Join-Path $Here "desktop.py"))
+# A bundled interpreter carries its own site-packages, so --isolated would hide
+# them. The system one is run isolated so a stray module in the working
+# directory cannot shadow ours.
+if ($PythonExe -eq $Bundled -or $PythonExe -eq $Venv) { $Isolated = @() } else { $Isolated = @("-I") }
+$AllArgs = @() + $LauncherArgs + $Isolated + @((Join-Path $Here "desktop.py"))
 
 Write-Host "Starting ChatGPT Share Exporter..." -ForegroundColor Cyan
 Write-Host "The first launch can take a few seconds while Chromium is prepared."
