@@ -40,8 +40,8 @@ async def require_auth(request: Request, call_next):
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    # The app must be safe on its own too, not only when Caddy happens to be
-    # the thing in front of it.
+    # The app must be safe on its own too, not only when something else
+    # happens to be in front of it.
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
