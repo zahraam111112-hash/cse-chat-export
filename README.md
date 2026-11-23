@@ -54,15 +54,37 @@ app/
   static/         CSS + JS
 run.py            web entry point
 run_bot.py        bot entry point
-deploy/
-  setup-service.sh        systemd user services + venv + Chromium
-  install-update-timer.sh pull origin/main every 10 min, self-reverting
-  update-service.sh       the update step itself (run by the timer)
-  caddy-share.conf        reverse-proxy site block
+start.cmd         Windows entry point (double-click)
+windows/
+  start.ps1       picks the interpreter, starts the app
+  desktop.py      serves on 127.0.0.1 and opens the browser
+  installer.iss   Inno Setup script for the release build
 tests/            decoder, docx, pdf, bot and security-regression tests (no network)
 ```
 
-## Run locally
+## Install on Windows
+
+Download `ChatGPT-Share-Exporter-Setup.exe` from the
+[Releases](../../releases) page and run it. It installs for the current user
+only — no administrator rights, no system-wide changes — and adds a
+*ChatGPT Share Exporter* shortcut. The app opens in your browser at a free
+local port.
+
+There is also a portable build (`ChatGPT-Share-Exporter-Windows.zip`): unpack it
+anywhere and run `start.cmd`.
+
+Python and Chromium are bundled, so nothing is downloaded on first launch. Job
+history lives in `%LOCALAPPDATA%\ChatGPTShareExporter\data`, outside the install
+folder, so installing a newer build keeps it.
+
+Telegram bot, from the install folder:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = "123456:ABC..."
+python\python.exe -I run_bot.py
+```
+
+## Run locally (development)
 
 ```powershell
 python -I -m pip install -r requirements.txt
@@ -144,67 +166,18 @@ The Telegram bot is **closed by default**: an empty `TELEGRAM_CHAT_ID` means
 nobody, not everybody. A public bot would let any stranger start unlimited
 Chromium runs.
 
-## Deployment
+`/healthz` is intentionally public (no auth) and returns only `{"ok":true}` so
+a launcher can tell the server is up; counters stay behind auth on `/api/stats`.
 
-The server runs it as an **unprivileged user service** (no docker, no sudo),
-straight out of a git clone, so `main` on GitHub *is* what runs there:
+## How updates work
 
-```bash
-# on the server, as the dev user
-git clone https://github.com/<owner>/<repo>.git ~/cse-app
-bash ~/cse-app/deploy/setup-service.sh
-bash ~/cse-app/deploy/install-update-timer.sh
-```
+Releases are built by GitHub Actions from a `v*` tag and attached to a GitHub
+Release. Download the newer installer and run it: the previous version is
+replaced in place while `%LOCALAPPDATA%\ChatGPTShareExporter\data` — the job
+history — is left alone.
 
-Use whatever pull credential your host uses — a read-only deploy key is the
-usual choice — so the checkout can fetch new commits but never push.
-
-`setup-service.sh` creates `.venv`, installs Chromium once, writes
-`~/.config/chatgpt-share-export.env` (mode 600) and enables both services on
-`127.0.0.1:8098`.
-
-`install-update-timer.sh` adds `cse-update.timer`, which polls `origin/main`
-every 10 minutes. When it moves, the timer fetches, hard-resets, reinstalls
-`requirements.txt` only if that file changed, restarts both services, and
-waits for `/healthz`. **If health does not come back it resets to the previous
-commit and restarts** — so a bad push self-reverts within one cycle.
-
-`data/` is gitignored local state and is never touched by the updater, so
-jobs survive updates. To roll back by hand:
-
-```bash
-cd ~/cse-app
-git log --oneline -5
-git reset --hard <good-sha>
-systemctl --user restart chatgpt-share-export.service chatgpt-share-export-bot.service
-```
-
-Public access needs an A record first:
-
-```
-cse.example.com -> 203.0.113.10
-```
-
-then append `deploy/caddy-share.conf` to `/etc/caddy/Caddyfile` and
-`systemctl restart caddy` (Caddy runs with `admin off`, so reload does not work;
-a restart is required — verify the other sites afterwards).
-
-Tips from the first deploy:
-
-- Resolvers cache the *absence* of a subdomain for the zone's negative TTL
-  (300 s). `nslookup` can keep reporting "no A record" for a few minutes after
-  the record exists — confirm against the authoritative NS or DoH
-  (`https://cloudflare-dns.com/dns-query?name=…&type=A`) before touching Caddy.
-- `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` catches
-  syntax errors *before* the restart that would take every site down.
-- A site block with no DNS record never gets a certificate and spams the log;
-  delete it rather than leaving it commented out partially.
-- `/healthz` is intentionally public (no auth) for liveness probes and returns
-  only `{"ok":true}` — counters stay behind auth on `/api/stats`.
-
-Auth lives **inside the app** (`CSE_AUTH_USER` / `CSE_AUTH_PASS` in the env
-file), not in the shared basic-auth wall, so this subdomain gets its own
-password.
+To uninstall, use *Apps & features* or the shortcut's uninstaller in the Start
+menu; the data folder stays until you delete it yourself.
 
 ## Known constraints
 
