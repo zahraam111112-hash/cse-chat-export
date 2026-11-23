@@ -22,12 +22,6 @@ if ROOT not in sys.path:
 
 HOST = "127.0.0.1"
 
-# The release bundles Chromium beside the interpreter (PLAYWRIGHT_BROWSERS_PATH=0
-# at build time). Playwright resolves that folder relative to the interpreter,
-# so an unzipped copy can be moved. A stale value in the caller's environment
-# would otherwise point at %LOCALAPPDATA%, where nothing was installed.
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
-
 
 def _data_dir() -> str:
     # State lives outside the install directory so reinstalling or unpacking a
