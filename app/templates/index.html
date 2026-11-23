@@ -100,6 +100,7 @@
           <td class="acts">
             <button class="mini" data-open="{{ j.id }}">View</button>
             {% if j.status == 'done' %}
+            <a class="mini lk" href="api/jobs/{{ j.id }}/pdf">PDF</a>
             <a class="mini lk" href="api/jobs/{{ j.id }}/docx">Word</a>
             <a class="mini lk" href="api/jobs/{{ j.id }}/md">MD</a>
             <a class="mini lk" href="api/jobs/{{ j.id }}/json">JSON</a>
@@ -140,6 +141,7 @@
     <div class="vhead">
       <h3 class="vtitle"></h3>
       <div class="vacts">
+        <a class="mini lk dl-pdf">PDF</a>
         <a class="mini lk dl-docx">Word</a>
         <a class="mini lk dl-md">Markdown</a>
         <a class="mini lk dl-json">JSON</a>

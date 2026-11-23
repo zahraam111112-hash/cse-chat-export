@@ -323,6 +323,37 @@ def normalize_url(url: str) -> str:
     return f"https://{host}/share/{m.group(2)}"
 
 
+def _settled(page, deadline: float) -> str:
+    """Read the page once it has stopped moving.
+
+    The share page re-navigates while its client bundle hydrates (full load,
+    then a client-side re-render). `page.content()` during one of those raises
+    "Unable to retrieve content because the page is navigating" — the failure
+    users saw. So a failed read is retried rather than propagated, and the
+    page is only accepted once it holds the conversation state, or once two
+    reads agree on its absence (a genuinely expired link).
+    """
+    last, html = None, ""
+    while time.time() < deadline:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            html = page.content()
+        except Exception:  # noqa: BLE001 - a navigation in flight is expected
+            last = None
+            page.wait_for_timeout(400)
+            continue
+        if STATE_KEY in html:
+            # The state is only rendered once the server has sent the whole
+            # conversation, so a stable read that has it is final. Waiting for
+            # a second identical read here cost ~1 s on every job.
+            return html
+        if html == last:
+            return html  # two quiet reads without it: treat the page as final
+        last = html
+        page.wait_for_timeout(600)
+    return html
+
+
 def fetch_html(url: str, timeout_ms: int = 90_000, proxy: str | None = None) -> tuple[str, str]:
     """Render the share page in headless Chromium and return (html, title)."""
     try:
@@ -346,14 +377,11 @@ def fetch_html(url: str, timeout_ms: int = 90_000, proxy: str | None = None) -> 
                 else r.continue_(),
             )
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            deadline = time.time() + 25
-            html = ""
-            while time.time() < deadline:
-                page.wait_for_timeout(750)
-                html = page.content()
-                if STATE_KEY in html and "messages" in html:
-                    break
-            title = page.title()
+            html = _settled(page, time.time() + 40)
+            try:
+                title = page.title()
+            except Exception:  # noqa: BLE001 - title is cosmetic
+                title = ""
             return html, title
         finally:
             browser.close()

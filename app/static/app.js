@@ -90,6 +90,7 @@ async function refreshJobs(limit = shown) {
         <td class="acts">
           <button class="mini" data-open="${j.id}">View</button>
           ${j.status === 'done' ? `
+            <a class="mini lk" href="/api/jobs/${j.id}/pdf">PDF</a>
             <a class="mini lk" href="/api/jobs/${j.id}/docx">Word</a>
             <a class="mini lk" href="/api/jobs/${j.id}/md">MD</a>
             <a class="mini lk" href="/api/jobs/${j.id}/json">JSON</a>` : ''}
@@ -133,6 +134,7 @@ function showJob(job) {
   const msgs = items.reduce((a, t) => a + t.messages.length, 0);
   $('.vmeta', viewer).textContent =
     `${items.length} conversation(s) · ${msgs} messages · ${chars.toLocaleString('en-GB')} chars · ${job.id}`;
+  $('.dl-pdf', viewer).href = `api/jobs/${job.id}/pdf`;
   $('.dl-docx', viewer).href = `api/jobs/${job.id}/docx`;
   $('.dl-md', viewer).href = `api/jobs/${job.id}/md`;
   $('.dl-json', viewer).href = `api/jobs/${job.id}/json`;

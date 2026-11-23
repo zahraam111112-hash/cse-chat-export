@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from . import auth, docx_export, limits, store
+from . import auth, docx_export, limits, pdf_export, store
 from .extractor import ExtractError, Transcript, extract, normalize_url
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -326,6 +326,25 @@ def download_docx(job_id: str, request: Request):
         data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="chatgpt-{job_id}.docx"'},
+    )
+
+
+@app.get("/api/jobs/{job_id}/pdf")
+def download_pdf(job_id: str, request: Request):
+    job = _mine_or_404(job_id, request)
+    if not job["transcripts"]:
+        raise HTTPException(404, "no transcript yet")
+    # Printing costs a Chromium launch, so it spends the same budget as a
+    # submission — otherwise the queue limit would be trivially bypassed.
+    _submit_budget(visitor(request), 1)
+    try:
+        data = pdf_export.build(_build_transcripts(job["transcripts"]), proxy=PROXY)
+    except Exception as exc:  # noqa: BLE001 - a browser failure is not a 500
+        raise HTTPException(503, f"PDF rendering failed: {exc}") from exc
+    return Response(
+        data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="chatgpt-{job_id}.pdf"'},
     )
 
 
