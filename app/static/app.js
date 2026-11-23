@@ -242,8 +242,11 @@ form.addEventListener('submit', async (ev) => {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(detailOf(data, 'request failed'));
-      // The batch API returns one job per accepted link, in the order sent.
-      targets = data.job_ids.map((id, i) => ({ id, url: urls[i] }));
+      // One job per accepted link, in order. Use the server's `accepted` list:
+      // `urls` is what we sent, so a rejected link in front would pair every
+      // later job with the wrong address in the progress rows.
+      const accepted = data.accepted || urls;
+      targets = data.job_ids.map((id, i) => ({ id, url: accepted[i] }));
       if (data.rejected && data.rejected.length) {
         note = ` · skipped ${data.rejected.length}: ` +
           data.rejected.map((x) => `${x.url} (${x.reason})`).join('; ');

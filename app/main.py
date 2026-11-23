@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import os
 import threading
@@ -73,30 +74,69 @@ class MultiRequest(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=20)
 
 
-def visitor(request: Request) -> str:
-    """Who is asking.
+TRUSTED_PROXIES = {
+    p.strip() for p in os.environ.get("CSE_TRUST_PROXY", "127.0.0.1,::1").split(",")
+    if p.strip()
+}
 
-    Behind Caddy the socket address is always 127.0.0.1, so the real client is
-    in a forwarded header. It is deliberately NOT trusted for anything but
-    grouping jobs and counting rate: a forged value can only shed one's own
-    rate budget, and the response is still limited by the queue ceiling.
+
+def _trusted_peer(addr: str) -> bool:
+    """A peer allowed to say who the caller is: the proxy, or anything local.
+
+    Loopback and private ranges are the operator's own networks — the proxy, a
+    dev run, a container bridge. A public, random client is never trusted with
+    a forwarded header, because that is exactly the impersonation we forbid.
     """
-    fwd = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
-    if fwd:
-        return fwd.split(",")[0].strip()[:64]
-    return request.client.host if request.client else "unknown"
+    if not addr:
+        return False
+    if addr in TRUSTED_PROXIES:
+        return True
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        # Not an IP at all: a unix socket or the test client, i.e. a local
+        # transport that no remote caller can reach.
+        return True
+    return ip.is_loopback or ip.is_private
 
 
-def _submit_budget(key: str, count: int) -> None:
-    if not limits.hit(key, count):
-        raise HTTPException(429, f"Too many requests: {limits.MAX_PER_WINDOW} links "
-                                 f"per {int(limits.WINDOW)}s. Try again in a minute.")
+def visitor(request: Request) -> str:
+    """Who is asking, as an identity that cannot be forged.
+
+    Behind the reverse proxy the socket address is always the proxy's, so the
+    real client has to come from a forwarded header. That header decides which
+    jobs a visitor may read, so a peer that is not a trustable proxy is ignored
+    when it sends one; a peer that is local or private is taken at its word
+    (an operator running the app directly, a container network), which also
+    keeps the loopback test client working.
+    """
+    socket_addr = request.client.host if request.client else ""
+    if _trusted_peer(socket_addr):
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            # A proxy appends the address it saw to whatever the client sent,
+            # so the trustworthy hop is the LAST one. The leftmost entry is
+            # exactly what a caller writes to impersonate someone else.
+            return fwd.split(",")[-1].strip()[:64]
+        real = request.headers.get("x-real-ip")
+        if real:
+            return real.strip()[:64]
+    return socket_addr or "unknown"
 
 
-def _queue_room(count: int) -> None:
+def _admit(key: str, count: int) -> None:
+    """Accept a submission, or refuse it without charging the caller.
+
+    The queue ceiling is checked first on purpose: a refused submission never
+    runs, so spending rate budget on it would let a caller who is already
+    blocked burn their whole window on requests the server rejected.
+    """
     # Refusing beats accepting work that would sit in the queue for hours.
     if store.queued_count() + count > limits.MAX_QUEUE:
         raise HTTPException(503, "The queue is full. Try again in a few minutes.")
+    if not limits.hit(key, count):
+        raise HTTPException(429, f"Too many requests: {limits.MAX_PER_WINDOW} links "
+                                 f"per {int(limits.WINDOW)}s. Try again in a minute.")
 
 
 def _mine_or_404(job_id: str, request: Request) -> dict:
@@ -241,8 +281,7 @@ def api_export(payload: ExportRequest, request: Request):
     except ExtractError as exc:
         raise HTTPException(400, str(exc)) from exc
     # Charged only after the link is accepted — same rule as the batch route.
-    _submit_budget(who, 1)
-    _queue_room(1)
+    _admit(who, 1)
     job_id = store.create_job([url], source="web", owner=who)
     return {"job_id": job_id, "status": "queued"}
 
@@ -262,8 +301,7 @@ def api_batch(payload: MultiRequest, request: Request):
         raise HTTPException(400, "; ".join(f"{r['url']}: {r['reason']}" for r in rejected))
     # Charged only for links that are actually accepted: a rejected link never
     # costs a Chromium run, so it must not spend the caller's budget either.
-    _submit_budget(who, len(urls))
-    _queue_room(len(urls))
+    _admit(who, len(urls))
     batch, job_ids = store.create_jobs(urls, source="web", owner=who)
     return {"batch": batch, "job_ids": job_ids, "count": len(urls),
             "rejected": rejected, "status": "queued"}
@@ -284,15 +322,15 @@ def api_batch_progress(batch: str, request: Request):
 @app.post("/api/jobs/{job_id}/retry")
 def api_retry_job(job_id: str, request: Request):
     job = _mine_or_404(job_id, request)
-    # A retry costs another Chromium run, so it spends the same budget.
-    _submit_budget(visitor(request), 1)
-    _queue_room(job["url_count"] or 1)
+    # A retry costs another Chromium run, so it spends the same budget — but
+    # only once it is actually going back in the queue (see the 409s below).
     if job["status"] == "done" and not job["error"]:
         raise HTTPException(409, "job already completed")
     # Only startup may adopt a 'running' row (its worker died with the process);
     # a live one must not be stolen from under its worker.
     if job["status"] == "running":
         raise HTTPException(409, "job is running; wait for it to finish")
+    _admit(visitor(request), 1)
     if not store.requeue_job(job_id):
         raise HTTPException(409, f"job is {job['status']}; wait for it to finish")
     return {"job_id": job_id, "status": "queued"}
@@ -334,9 +372,11 @@ def download_pdf(job_id: str, request: Request):
     job = _mine_or_404(job_id, request)
     if not job["transcripts"]:
         raise HTTPException(404, "no transcript yet")
-    # Printing costs a Chromium launch, so it spends the same budget as a
+    # Printing costs a Chromium launch, so it spends the same rate budget as a
     # submission — otherwise the queue limit would be trivially bypassed.
-    _submit_budget(visitor(request), 1)
+    if not limits.hit(visitor(request), 1):
+        raise HTTPException(429, f"Too many requests: {limits.MAX_PER_WINDOW} links "
+                                 f"per {int(limits.WINDOW)}s. Try again in a minute.")
     try:
         data = pdf_export.build(_build_transcripts(job["transcripts"]), proxy=PROXY)
     except Exception as exc:  # noqa: BLE001 - a browser failure is not a 500
@@ -369,12 +409,22 @@ MAX_WORKERS = int(os.environ.get("CSE_WORKERS", "3"))
 def _worker() -> None:
     # A Chromium per queued job does not scale past a handful; a fixed pool
     # keeps memory bounded and lets jobs wait their turn instead of all at once.
+    # An exception escaping this loop ends the thread for good — nothing
+    # restarts it, so a single locked database would quietly cost the pool a
+    # worker until there are none and every job sits queued for ever.
     while True:
-        job_id = next_job()
-        if job_id is None:
+        try:
+            job_id = next_job()
+            if job_id is None:
+                time.sleep(1.0)
+                continue
+            run_job(job_id, claimed=True)
+        except Exception as exc:  # noqa: BLE001 - one bad job must not end the worker
+            try:
+                store.log_event("worker.error", f"{type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - logging is best effort here
+                pass
             time.sleep(1.0)
-            continue
-        run_job(job_id, claimed=True)
 
 
 def next_job() -> str | None:

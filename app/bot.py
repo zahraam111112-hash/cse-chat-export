@@ -122,9 +122,15 @@ def handle_link(client: httpx.Client, chat_id: str, url: str) -> None:
     except Exception as exc:  # noqa: BLE001
         send(client, chat_id, f"⚠️ ساخت فایل ورد ناموفق: {esc(redact(str(exc)))}")
 
-    json_bytes = json.dumps(transcript.as_dict(), ensure_ascii=False, indent=2).encode()
-    upload_document(client, chat_id, f"{_slug(transcript.title)}.json", json_bytes,
-                    caption="JSON · پیام‌ها و نقش‌ها")
+    # Both uploads are best effort: Telegram can refuse a file (size, flood
+    # control), and the extraction itself has already succeeded. Letting an
+    # upload raise would unwind to the poll loop with the row still 'running'.
+    try:
+        json_bytes = json.dumps(transcript.as_dict(), ensure_ascii=False, indent=2).encode()
+        upload_document(client, chat_id, f"{_slug(transcript.title)}.json", json_bytes,
+                        caption="JSON · پیام‌ها و نقش‌ها")
+    except Exception as exc:  # noqa: BLE001
+        send(client, chat_id, f"⚠️ ارسال فایل JSON ناموفق: {esc(redact(str(exc)))}")
 
     store.update_job(job_id, status="done",
                      transcripts=json.dumps([transcript.as_dict()], ensure_ascii=False))

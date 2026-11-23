@@ -84,7 +84,11 @@ def _table(doc: Document, rows: list[list[str]]) -> None:
         return
     header = rows[0]
     body = rows[1:]
-    if body and all(re.fullmatch(r":?-{2,}:?", c.strip()) for c in body[0] if c.strip()):
+    # The separator is `---`-style cells between header and rows. A row whose
+    # cells are all blank is data, not a separator: `all()` over the empty
+    # generator is True, so it must be excluded explicitly.
+    if body and any(c.strip() for c in body[0]) and all(
+            re.fullmatch(r":?-{2,}:?", c.strip()) for c in body[0] if c.strip()):
         body = body[1:]
     ncol = max([len(header)] + [len(r) for r in body] or [0])
     if ncol == 0:

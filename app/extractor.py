@@ -243,22 +243,26 @@ def find_state(html: str) -> dict[str, Any]:
     state = _best(html)
     if state and state.get("messages"):
         return state
-    state = state or _from_serialized(html)
-    if state and state.get("messages"):
-        return state
+    # `_best` can return a state that carries no messages. The serialized form
+    # often holds the real one, so try it — but only let it win when it has
+    # messages, or an empty state would be replaced by None and every later
+    # fallback skipped, reporting a good link as empty.
+    serialized = _from_serialized(html)
+    if serialized and serialized.get("messages"):
+        return serialized
 
     chunks = _ENQUEUE.findall(html)
     if chunks:
         payload = "".join(_unescape_stream(c) for c in chunks)
-        state = _best(payload) or _from_serialized(payload)
-        if state:
-            return state
+        found = _best(payload) or _from_serialized(payload)
+        if found:
+            return found
 
     if ESCAPED_KEY in html:
         payload = html.replace('\\"', '"').replace("\\\\", "\\")
-        state = _best(payload) or _from_serialized(payload)
-        if state:
-            return state
+        found = _best(payload) or _from_serialized(payload)
+        if found:
+            return found
 
     if state:
         return state
