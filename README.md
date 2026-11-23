@@ -2,7 +2,7 @@
 
 Extract the **complete** text of a shared ChatGPT conversation — every message,
 markdown, tables and code blocks — from a public `chatgpt.com/share/<id>` link,
-then view it in a dashboard or download it as Word / Markdown / JSON.
+then view it in a dashboard or download it as PDF / Word / Markdown / JSON.
 
 It also runs as a Telegram bot: send a link, get the transcript back as a
 `.docx` and `.json` file.
@@ -46,6 +46,7 @@ app/
   extractor.py    Playwright fetch + tuple decoder (the core)
   store.py        SQLite jobs/users/events
   docx_export.py  Markdown → .docx renderer with RTL support
+  pdf_export.py   Markdown → HTML → PDF, printed by the same Chromium
   main.py         FastAPI: dashboard, REST API, file downloads
   bot.py          Telegram long-polling bot
   auth.py         optional HTTP Basic auth
@@ -58,7 +59,7 @@ deploy/
   install-update-timer.sh pull origin/main every 10 min, self-reverting
   update-service.sh       the update step itself (run by the timer)
   caddy-share.conf        reverse-proxy site block
-tests/            decoder, docx, bot and security-regression tests (no network)
+tests/            decoder, docx, pdf, bot and security-regression tests (no network)
 ```
 
 ## Run locally
@@ -107,6 +108,7 @@ All settings are environment variables.
 | `CSE_WORKERS` | `3` | Concurrent Chromium extractions |
 | `CSE_AUTH_USER` / `CSE_AUTH_PASS` | unset | HTTP Basic wall over the whole dashboard |
 | `CSE_PUBLIC` | unset | `1` = open to anonymous visitors (see below) |
+| `CSE_TRUST_PROXY` | `127.0.0.1` | Comma-separated proxy addresses whose `X-Forwarded-For` is believed |
 | `CSE_RATE_MAX` | `20` | Links accepted per address per rolling 60 s window |
 | `CSE_MAX_QUEUE` | `60` | Queued jobs before new requests get `503` |
 | `CSE_DB` | `data/app.db` | SQLite file; point it elsewhere to keep state off the checkout |
@@ -128,10 +130,15 @@ All settings are environment variables.
    become admin-only, and the rate limit and queue ceiling above are what keep
    one caller from exhausting the service.
 
-Public mode is the reason `visitor()` reads `X-Forwarded-For`: behind a reverse
-proxy the socket address is always the proxy's. The header is only used to
-group jobs and count rate — forging it can only shed one caller's own budget,
-and the queue ceiling still caps total work.
+Public mode is the reason `visitor()` looks at `X-Forwarded-For`: behind a
+reverse proxy the socket address is always the proxy's. But that header also
+decides which jobs a visitor may read, so it is trusted only when the request
+actually comes from a local or private address (the proxy, a container
+network), and only its **rightmost** (proxy-written) hop is used — a
+client-supplied value in front of it is ignored. A public caller writing the
+header directly is ignored and keyed by its socket address instead, so a forged
+header cannot reach someone else's transcripts. `CSE_TRUST_PROXY` adds extra
+trusted addresses beyond loopback and the private ranges.
 
 The Telegram bot is **closed by default**: an empty `TELEGRAM_CHAT_ID` means
 nobody, not everybody. A public bot would let any stranger start unlimited
@@ -144,14 +151,13 @@ straight out of a git clone, so `main` on GitHub *is* what runs there:
 
 ```bash
 # on the server, as the dev user
-git clone https://github.com/<owner>/<repo>.git ~/cse-repo
-bash ~/cse-repo/deploy/setup-service.sh
-bash ~/cse-repo/deploy/install-update-timer.sh
+git clone https://github.com/<owner>/<repo>.git ~/cse-app
+bash ~/cse-app/deploy/setup-service.sh
+bash ~/cse-app/deploy/install-update-timer.sh
 ```
 
-The clone authenticates with a **read-only deploy key** (`~/.ssh/cse_deploykey`,
-pinned to `github.com` in `~/.ssh/config`), so the server can pull but never
-push.
+Use whatever pull credential your host uses — a read-only deploy key is the
+usual choice — so the checkout can fetch new commits but never push.
 
 `setup-service.sh` creates `.venv`, installs Chromium once, writes
 `~/.config/chatgpt-share-export.env` (mode 600) and enables both services on
@@ -167,7 +173,7 @@ commit and restarts** — so a bad push self-reverts within one cycle.
 jobs survive updates. To roll back by hand:
 
 ```bash
-cd ~/cse-repo
+cd ~/cse-app
 git log --oneline -5
 git reset --hard <good-sha>
 systemctl --user restart chatgpt-share-export.service chatgpt-share-export-bot.service
@@ -176,7 +182,7 @@ systemctl --user restart chatgpt-share-export.service chatgpt-share-export-bot.s
 Public access needs an A record first:
 
 ```
-cse.<your-domain> -> <origin-ip>
+cse.example.com -> 203.0.113.10
 ```
 
 then append `deploy/caddy-share.conf` to `/etc/caddy/Caddyfile` and
