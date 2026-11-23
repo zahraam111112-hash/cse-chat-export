@@ -12,8 +12,7 @@ $Here       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root       = Split-Path -Parent $Here
 $PythonExe  = $null
 
-# A venv keeps the interpreter in Scripts\, never at its root.
-$Bundled = Join-Path $Root "python\Scripts\python.exe"
+$Bundled = Join-Path $Root "python\python.exe"
 $Venv    = Join-Path $Root ".venv\Scripts\python.exe"
 
 if (Test-Path $Bundled) {
