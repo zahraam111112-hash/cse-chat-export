@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatGPT Share Exporter</title>
+<link rel="stylesheet" href="static/app.css?v={{ asset_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">▣</span>
+    <div>
+      <h1>ChatGPT Share Exporter</h1>
+      <p>Extract, read and export the full text of shared conversations</p>
+    </div>
+  </div>
+  {% if admin %}
+  <div class="kpis">
+    <div class="kpi"><b id="kpi-jobs">{{ stats.jobs }}</b><span>Jobs</span></div>
+    <div class="kpi"><b id="kpi-done">{{ stats.done }}</b><span>Done</span></div>
+    <div class="kpi"><b id="kpi-partial">{{ stats.partial }}</b><span>Partial</span></div>
+    <div class="kpi"><b id="kpi-failed">{{ stats.failed }}</b><span>Failed</span></div>
+    <div class="kpi"><b id="kpi-users">{{ stats.users }}</b><span>Telegram users</span></div>
+    <div class="kpi"><b id="kpi-chars">{{ "{:,}".format(stats.chars) }}</b><span>Characters</span></div>
+  </div>
+  {% endif %}
+</header>
+
+<main>
+  <section class="card">
+    <h2>New extraction</h2>
+    <form id="form">
+      <textarea id="urls" rows="4" placeholder="https://chatgpt.com/share/...&#10;One link per line"></textarea>
+      <div class="row">
+        <button type="submit" id="go">Extract</button>
+        <span class="hint">Up to 5 links per request · each link becomes its own job and file</span>
+      </div>
+    </form>
+    <div id="status" class="status" hidden></div>
+    <div id="progress" class="progress" hidden>
+      <div class="pbar"><div class="pfill" id="pfill"></div></div>
+      <div class="pmeta">
+        <span id="plabel"></span>
+        <span id="pcount" class="hint"></span>
+      </div>
+      <ul id="plist" class="plist"></ul>
+    </div>
+    <div id="result"></div>
+  </section>
+
+  <section class="card">
+    <h2>Recent jobs</h2>
+    <div class="filters">
+      <input id="q" type="search" placeholder="Search titles, messages, links or job id…"
+             autocomplete="off" aria-label="Search jobs">
+      <select id="f-status" aria-label="Filter by status">
+        <option value="">All statuses</option>
+        <option value="done">Done</option>
+        <option value="partial">Partial</option>
+        <option value="failed">Failed</option>
+        <option value="running">Running</option>
+        <option value="queued">Queued</option>
+      </select>
+      <select id="f-source" aria-label="Filter by source">
+        <option value="">All sources</option>
+        <option value="web">Web</option>
+        <option value="telegram">Telegram</option>
+      </select>
+      <button type="button" id="clear" class="mini" hidden>Clear</button>
+      <span id="count" class="hint"></span>
+    </div>
+    <div class="table-wrap">
+    <table class="jobs">
+      <thead><tr><th>#</th><th>Status</th><th>Title</th><th>Source</th><th>Link</th><th>Time</th><th></th></tr></thead>
+      <tbody id="jobs">
+      {% for j in jobs %}
+        <tr data-job="{{ j.id }}" data-status="{{ j.status }}" data-error="{{ 1 if j.error else 0 }}">
+          <td class="mono">{{ j.id }}</td>
+          <td>
+            {% if j.status == 'done' and j.error %}
+            <span class="badge partial" title="{{ j.error }}">partial</span>
+            {% else %}
+            <span class="badge {{ j.status }}">{{ j.status }}</span>
+            {% endif %}
+          </td>
+          <td class="title">
+            {% if j.title %}
+              <span class="tname" title="{{ j.titles | join(' · ') }}">{{ j.title }}</span>
+              {% if j.conversations > 1 %}<span class="tcount">+{{ j.conversations - 1 }}</span>{% endif %}
+            {% elif j.status in ('queued', 'running') %}
+              <span class="muted">Extracting…</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>{{ j.source }}</td>
+          <td class="url">{{ j.urls[0] }}</td>
+          <td class="mono t">{{ j.created_at }}</td>
+          <td class="acts">
+            <button class="mini" data-open="{{ j.id }}">View</button>
+            {% if j.status == 'done' %}
+            <a class="mini lk" href="api/jobs/{{ j.id }}/pdf">PDF</a>
+            <a class="mini lk" href="api/jobs/{{ j.id }}/docx">Word</a>
+            <a class="mini lk" href="api/jobs/{{ j.id }}/md">MD</a>
+            <a class="mini lk" href="api/jobs/{{ j.id }}/json">JSON</a>
+            {% endif %}
+            {% if j.status == 'failed' or (j.status == 'done' and j.error) %}
+            <button class="mini retry" data-retry="{{ j.id }}"
+                    title="Run this job again">↻</button>
+            {% endif %}
+            <button class="mini del" data-del="{{ j.id }}"
+                    data-name="{{ j.title or j.id }}" title="Delete this job and its data">×</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">No jobs yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="row"><button type="button" id="more" class="mini" hidden>Load more</button></div>
+  </section>
+
+  {% if admin %}
+  <section class="card">
+    <h2>Events</h2>
+    <ul class="events">
+      {% for e in events %}
+      <li><span class="mono">{{ e.kind }}</span> {{ e.detail }}</li>
+      {% else %}
+      <li class="empty">—</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</main>
+
+<template id="viewer">
+  <div class="viewer">
+    <div class="vhead">
+      <h3 class="vtitle"></h3>
+      <div class="vacts">
+        <a class="mini lk dl-pdf">PDF</a>
+        <a class="mini lk dl-docx">Word</a>
+        <a class="mini lk dl-md">Markdown</a>
+        <a class="mini lk dl-json">JSON</a>
+        <button class="mini close">Close</button>
+      </div>
+    </div>
+    <p class="vmeta"></p>
+    <div class="vbody"></div>
+  </div>
+</template>
+
+<script src="static/app.js?v={{ asset_v }}"></script>
+</body>
+</html>
