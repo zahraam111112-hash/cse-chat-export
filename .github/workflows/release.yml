@@ -35,20 +35,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $App = "build\ChatGPT-Share-Exporter"
+          # A short root on purpose: the bundled Chromium tree is deep enough
+          # that MAX_PATH is reached under D:\a\<repo>\build\...
+          $App = "C:\cse-app"
+          Remove-Item -Recurse -Force $App -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $App | Out-Null
 
           Copy-Item app, windows, tests -Destination $App -Recurse
           Copy-Item run.py, run_bot.py, requirements.txt, README.md, start.cmd -Destination $App
-          Copy-Item windows\README.md -Destination "$App\WINDOWS.md"
 
-          # Wheels are resolved up front so the bundled venv can install with
-          # --no-index: a build machine with no network at that point still
-          # produces a complete runtime.
-          python -I -m pip download -r requirements.txt -d build\wheels --only-binary=:all:
+          # A short wheel cache too: pip unpacks there, and the paths inside
+          # some wheels are already long.
+          python -I -m pip download -r requirements.txt -d C:\cse-wheels --only-binary=:all:
           python -I -m venv "$App\python"
           & "$App\python\Scripts\python.exe" -I -m pip install --no-index `
-            --find-links build\wheels -r requirements.txt
+            --find-links C:\cse-wheels -r requirements.txt
 
           # PLAYWRIGHT_BROWSERS_PATH=0 puts Chromium inside the venv instead of
           # %LOCALAPPDATA%, so it travels with the folder.
@@ -59,7 +60,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $App = "build\ChatGPT-Share-Exporter"
+          $App = "C:\cse-app"
 
           Compress-Archive -Path "$App\*" -DestinationPath "ChatGPT-Share-Exporter-Windows.zip"
 
@@ -69,7 +70,9 @@ jobs:
           $Iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $Iscc)) { throw "ISCC.exe not found at $Iscc" }
 
-          & $Iscc "windows\installer.iss"
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          & $Iscc "/DSourceRoot=$App" "/O$PWD\dist" "windows\installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
           if (-not (Test-Path "dist\ChatGPT-Share-Exporter-Setup.exe")) {
             throw "Inno Setup produced no installer"
           }
