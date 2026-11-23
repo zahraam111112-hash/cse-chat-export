@@ -31,6 +31,14 @@ fi
 
 cd "$APP_DIR"
 
+# A hard reset would destroy anything edited here by hand. Production is
+# update-only: upgrades belong in a work clone, so a dirty live checkout is
+# held, not overwritten, and someone gets a log line about it.
+if [ -n "$(git status --porcelain)" ]; then
+  log "live checkout is dirty - refusing to reset; move the change elsewhere"
+  exit 0
+fi
+
 # The app lives in a subdirectory of the repo, and `git rev-parse rev:path`
 # resolves against the repo root, so build the path from the toplevel.
 TOP="$(git rev-parse --show-toplevel)"
@@ -76,12 +84,18 @@ check() {
   printf '%s' "$body" | grep -q '"db": *true'
 }
 
-for _ in $(seq 1 20); do
-  sleep 1
+# A cold start of this app is not instant: importing FastAPI, Jinja and the
+# exporter takes tens of seconds on a loaded host, and the window below used
+# to be 20 s - so a perfectly good deploy was rolled back on a busy box. The
+# wait is generous, and the check runs before the sleep so the last attempt
+# counts instead of being thrown away.
+HEALTH_WAIT="${HEALTH_WAIT:-120}"
+for _ in $(seq 1 "$HEALTH_WAIT"); do
   if check; then
     log "healthy at $after"
     exit 0
   fi
+  sleep 1
 done
 
 log "health check failed after update — rolling back to $before"
