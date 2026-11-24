@@ -14,6 +14,7 @@ import re
 
 import markdown as md
 
+from . import math as math_mod
 from .extractor import Transcript
 
 CSS = """
@@ -47,6 +48,11 @@ th, td { border: 1px solid #b9c2d0; padding: 1.5mm 2mm; text-align: start; }
 th { background: #1f3864; color: #fff; }
 blockquote { margin: 2mm 0; padding: 1mm 3mm; border-left: 3px solid #8eaadb; color: #444; }
 img { max-width: 100%; }
+/* Chromium ships MathML core; the display block needs its own centring
+   because MathML does not inherit the paragraph's RTL alignment. */
+math { font-size: 11pt; }
+math[display="block"] { display: block; margin: 2mm auto; }
+.tex { direction: ltr; text-align: left; font-family: Consolas, monospace; font-size: 9pt; }
 """
 
 RTL_CHAR = re.compile(r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]")
@@ -58,9 +64,11 @@ def _body(transcript: Transcript) -> str:
         who = "User" if message.role == "user" else "ChatGPT"
         css = "user" if message.role == "user" else "assistant"
         rtl = " rtl" if RTL_CHAR.search(message.content) else ""
-        rendered = md.markdown(
+        rendered = math_mod.to_html(
             message.content,
-            extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
+            lambda chunk: md.markdown(
+                chunk, extensions=["fenced_code", "tables", "sane_lists", "nl2br"]
+            ),
         )
         parts.append(
             f'<div class="msg {css}{rtl}">'

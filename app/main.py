@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from . import auth, docx_export, limits, pdf_export, store
+from . import auth, docx_export, limits, math as math_mod, pdf_export, store
 from .extractor import ExtractError, Transcript, extract, normalize_url
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -271,6 +271,26 @@ def api_jobs(request: Request, limit: int = 30, q: str | None = None,
 @app.get("/api/jobs/{job_id}")
 def api_job(job_id: str, request: Request):
     return _mine_or_404(job_id, request)
+
+
+@app.get("/api/jobs/{job_id}/html/{index}/{n}", response_class=HTMLResponse)
+def api_message_html(job_id: str, index: int, n: int, request: Request):
+    """One message as HTML, with its formulas converted to MathML.
+
+    The dashboard has to show what the exports show, and the conversion is
+    Python: re-implementing latex2mathml in JavaScript would give the preview a
+    second, drifting renderer. So the preview asks for each message and drops
+    the sanitiser's output into the page — the same `to_html()` the PDF is
+    printed from, escaping included.
+    """
+    job = _mine_or_404(job_id, request)
+    items = job["transcripts"] or []
+    if not 0 <= index < len(items):
+        raise HTTPException(404, "conversation not found")
+    messages = items[index].get("messages") or []
+    if not 0 <= n < len(messages):
+        raise HTTPException(404, "message not found")
+    return HTMLResponse(math_mod.to_html(messages[n].get("content", "")))
 
 
 @app.post("/api/export")

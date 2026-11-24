@@ -141,16 +141,31 @@ function showJob(job) {
   $('.close', viewer).onclick = () => (result.innerHTML = '');
 
   const body = $('.vbody', viewer);
-  for (const t of items) {
-    for (const m of t.messages) {
+  // The serverside renderer turns `$…$` into MathML, so the preview shows the
+  // same formulas as the PDF instead of raw LaTeX. Until each message arrives
+  // its text is still shown, escaped, so the viewer never opens blank.
+  items.forEach((t, ti) => {
+    t.messages.forEach((m, mi) => {
       const div = document.createElement('div');
       div.className = `msg ${m.role === 'user' ? 'user' : 'assistant'}`;
       div.innerHTML =
         `<div class="who">${m.role === 'user' ? '👤 User' : '🤖 ChatGPT'}</div>` +
         `<div class="content">${esc(m.content)}</div>`;
       body.appendChild(div);
-    }
-  }
+      // Only a message that has something to convert is worth a round trip;
+      // a plain one is already what the server would send back.
+      if (!/[\\$]/.test(m.content)) return;
+      const box = $('.content', div);
+      fetch(`api/jobs/${job.id}/html/${ti}/${mi}`)
+        .then((r) => (r.ok ? r.text() : null))
+        .then((html) => {
+          if (html === null) return;
+          box.innerHTML = html;
+          box.classList.add('rich');
+        })
+        .catch(() => {});  // the escaped text stays, which is not an error
+    });
+  });
   result.appendChild(viewer);
 }
 

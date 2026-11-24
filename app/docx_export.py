@@ -11,7 +11,17 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from docx.oxml import parse_xml
+
+from . import math as math_mod
 from .extractor import Transcript
+
+# The namespace prefix `m:` has to be declared wherever an OMML fragment is
+# parsed on its own; python-docx otherwise rejects the undeclared prefix.
+NSDECL = (
+    'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+)
 
 FA_FONT = "Tahoma"
 CODE_FONT = "Consolas"
@@ -59,12 +69,40 @@ def _shade(paragraph, hex_fill: str) -> None:
     pPr.append(shd)
 
 
-def _inline(paragraph, text: str, size: float = 10.5, bold: bool = False, font: str = FA_FONT) -> None:
+def _inline(paragraph, text: str, size: float = 10.5, bold: bool = False, font: str = FA_FONT,
+            color=None) -> None:
+    if "\\" in text or "$" in text:
+        if math_mod.has_math(text):
+            for seg in math_mod.segments(text):
+                if seg.kind == "text":
+                    _inline_plain(paragraph, seg.text, size, bold, font, color)
+                else:
+                    _math(paragraph, seg.text, seg.display, size, font)
+            return
+    _inline_plain(paragraph, text, size, bold, font, color)
+
+
+def _math(paragraph, latex: str, display: bool, size: float, font: str) -> None:
+    xml = math_mod.omml(latex, display)
+    if not xml:
+        _font(paragraph.add_run(math_mod._pretty(latex)), font, size, bold=False, italic=True)
+        return
+    # OMML travels as a sibling of w:r inside the paragraph; append it to the
+    # same parent so the equation sits where the formula appeared.
+    node = parse_xml(
+        f'<m:oMathPara {NSDECL}><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>'
+        f"{xml}</m:oMathPara>"
+    ) if display else parse_xml(f"<w:r {NSDECL}>{xml}</w:r>")
+    paragraph._p.append(node)
+
+
+def _inline_plain(paragraph, text: str, size: float = 10.5, bold: bool = False, font: str = FA_FONT,
+                  color=None) -> None:
     for token in INLINE.split(text):
         if not token:
             continue
         if token.startswith("**") and token.endswith("**") and len(token) > 4:
-            _font(paragraph.add_run(token[2:-2]), font, size, True)
+            _font(paragraph.add_run(token[2:-2]), font, size, True, color=color)
         elif token.startswith("`") and token.endswith("`") and len(token) > 2:
             run = paragraph.add_run(token[1:-1])
             _font(run, CODE_FONT, max(size - 2.5, 6), False)
@@ -74,9 +112,9 @@ def _inline(paragraph, text: str, size: float = 10.5, bold: bool = False, font: 
             _font(run, font, size, bold)
             run.font.color.rgb = RGBColor(0x0B, 0x4F, 0x9E)
         elif token.startswith("*") and token.endswith("*") and len(token) > 2:
-            _font(paragraph.add_run(token[1:-1]), font, size, bold, True)
+            _font(paragraph.add_run(token[1:-1]), font, size, bold, True, color=color)
         else:
-            _font(paragraph.add_run(token), font, size, bold)
+            _font(paragraph.add_run(token), font, size, bold, color=color)
 
 
 def _table(doc: Document, rows: list[list[str]]) -> None:
@@ -121,13 +159,86 @@ def _table(doc: Document, rows: list[list[str]]) -> None:
     doc.add_paragraph()
 
 
+def _display_block(lines: list[str], i: int) -> tuple[str, int] | None:
+    """Read a display formula starting at line `i`; return (latex, next index).
+
+    The delimiters are `\\[...\\]`, `$$...$$`, or a fence line holding both.
+    Returns None when line `i` does not open a display formula.
+    """
+    line = lines[i].strip()
+    if not (line.startswith("\\[") or line.startswith("$$")):
+        return None
+    opener = line[:2]
+    closer = "\\]" if opener == "\\[" else "$$"
+    body = line[2:]
+    if closer in body:
+        return body[: body.index(closer)].strip(), i + 1
+    parts = [body] if body.strip() else []
+    for j in range(i + 1, len(lines)):
+        if closer in lines[j]:
+            parts.append(lines[j][: lines[j].index(closer)])
+            return "\n".join(parts).strip(), j + 1
+        parts.append(lines[j])
+    # Never closed: leave the lines to the text renderer rather than eat the
+    # rest of the message into a formula that was not there.
+    return None
+
+
+def _expand(lines: list[str]) -> list[str | tuple[str, ...]]:
+    """Fold each display formula into one item so the renderer sees it whole.
+
+    Without this a `\\[` line and its `\\]` line reach the inline renderer
+    separately, and the formula comes out as backslashes and braces — the bug
+    this module exists to fix. Fenced code is left verbatim.
+    """
+    out: list[str | tuple[str, ...]] = []
+    i = 0
+    fenced = False
+    while i < len(lines):
+        if FENCE.match(lines[i]):
+            fenced = not fenced
+            out.append(lines[i])
+            i += 1
+            continue
+        if not fenced:
+            block = _display_block(lines, i)
+            if block is not None:
+                out.append(("display", block[0]))
+                i = block[1]
+                continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def _display(paragraph, latex: str, size: float, font: str) -> None:
+    xml = math_mod.omml(latex, True)
+    if not xml:
+        _font(paragraph.add_run(math_mod._pretty(latex)), font, size, bold=False, italic=True)
+        return
+    paragraph._p.append(parse_xml(
+        f'<m:oMathPara {NSDECL}><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>'
+        f"{xml}</m:oMathPara>"
+    ))
+
+
 def render_markdown(doc: Document, markdown: str) -> None:
-    lines = (markdown or "").split("\n")
+    lines = _expand((markdown or "").split("\n"))
     table_rows: list[list[str]] = []
     code: list[str] = []
     in_code = False
 
     for line in lines:
+        if isinstance(line, tuple):
+            if table_rows:
+                _table(doc, table_rows)
+                table_rows = []
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(4)
+            _display(p, line[1], 11, FA_FONT)
+            continue
         if FENCE.match(line):
             if in_code:
                 for code_line in code:
@@ -167,8 +278,10 @@ def render_markdown(doc: Document, markdown: str) -> None:
             rtl = bool(RTL_CHAR.search(text))
             _set_rtl(p) if rtl else None
             p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
-            _font(p.add_run(text), FA_FONT, {1: 17, 2: 14, 3: 12, 4: 11, 5: 10.5, 6: 10}.get(level, 10.5), True,
-                  color=RGBColor(0x1F, 0x38, 0x64))
+            # A heading can carry a formula (`### ۱. برای \(x>x_0\)`), so it
+            # goes through the same inline renderer the body does.
+            _inline(p, text, {1: 17, 2: 14, 3: 12, 4: 11, 5: 10.5, 6: 10}.get(level, 10.5),
+                    True, FA_FONT, color=RGBColor(0x1F, 0x38, 0x64))
             p.paragraph_format.space_before = Pt(12 if level <= 2 else 8)
             p.paragraph_format.space_after = Pt(4)
             p.paragraph_format.keep_with_next = True
