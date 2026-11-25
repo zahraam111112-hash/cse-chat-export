@@ -797,7 +797,10 @@ def test_a_closed_fence_is_markdown_and_an_open_one_is_escaped():
     from app import math as math_mod
     closed = "```\n<img src=x onerror=alert(1)>\n```"
     html = math_mod.to_html(closed)
-    assert "<pre>" in html and "onerror=alert(1)" in html, "code must stay literal"
+    # Markdown escapes the body itself, once; a second escape here would show
+    # the reader `&amp;lt;` in code they are trying to copy.
+    assert "<pre><code>&lt;img src=x onerror=alert(1)&gt;" in html
+    assert "&amp;lt;" not in html, "no double escaping inside a fence"
 
     open_ = "```" + "\n<img src=x onerror=alert(1)>\n"
     html = math_mod.to_html(open_)
