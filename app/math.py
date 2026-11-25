@@ -248,6 +248,23 @@ def render_markdown(text: str) -> str:
     )
 
 
+# A fence delimiter line: the opening one may carry a language tag, the closing
+# one is bare. `segments()` has already cut the segment at the first closing
+# line, so the *last* delimiter line in the segment is the one that closes it.
+_FENCE_LINE = re.compile(r"^[ \t]*```.*$", re.M)
+_FENCE_BARE = re.compile(r"^[ \t]*```[ \t]*$")
+
+
+def _fence_closed(segment: str) -> bool:
+    """True when the segment really ends with a closing delimiter.
+
+    `FENCE` also matches a fence nobody closed (`\\Z`), and Markdown does not
+    treat that as code — it renders the body as ordinary Markdown.
+    """
+    lines = _FENCE_LINE.findall(segment)
+    return len(lines) >= 2 and bool(_FENCE_BARE.match(lines[-1]))
+
+
 def to_html(text: str, render=None) -> str:
     """Interleave rendered text and MathML for the HTML exporters.
 
@@ -263,9 +280,14 @@ def to_html(text: str, render=None) -> str:
         if seg.kind == "text":
             # A fence is Markdown's own literal block: it escapes what is
             # inside it, so escaping here as well would make the reader see
-            # `&amp;amp;` in code they are trying to copy.
+            # `&amp;amp;` in code they are trying to copy. Only a *closed*
+            # fence gets that treatment: `FENCE` deliberately matches an
+            # unterminated one too (it runs to the end of the message), but
+            # Markdown does not treat that as code — it renders the body as
+            # ordinary Markdown, so the escape is the only thing standing
+            # between somebody's conversation and the dashboard.
             parts.append(
-                seg.text if FENCE.fullmatch(seg.text)
+                seg.text if FENCE.fullmatch(seg.text) and _fence_closed(seg.text)
                 else html_mod.escape(seg.text, quote=False)
             )
             continue
@@ -381,11 +403,18 @@ def _script(match: str, body: str) -> str:
 def _pretty(latex: str) -> str:
     s = " ".join(latex.split())
     s = s.replace("\\\\", " ")
-    # Fractions and roots nest, so unwrap them innermost-first.
-    while re.search(r"\\frac\s*\{", s):
-        s = re.sub(
-            r"\\frac\s*(\{[^{}]*\}|[^{}\s])\s*(\{[^{}]*\}|[^{}\s])",
+    # Fractions and roots nest, so unwrap them innermost-first. `\frac{a}` with
+    # only one argument is what a typo (or a truncated formula) looks like, and
+    # the substitution below cannot match it — so the loop must stop when a pass
+    # changes nothing. Testing for `\frac{` alone spins for ever on it, and the
+    # caller is a request thread.
+    frac = re.compile(r"\\frac\s*(\{[^{}]*\}|[^{}\s])\s*(\{[^{}]*\}|[^{}\s])")
+    while True:
+        unwrapped = frac.sub(
             lambda m: f"({_unwrap(m.group(1))})/({_unwrap(m.group(2))})", s)
+        if unwrapped == s:
+            break
+        s = unwrapped
     s = re.sub(r"\\sqrt\s*(\{[^{}]*\}|[^{}\s])", lambda m: f"√({_unwrap(m.group(1))})", s)
     s = re.sub(r"\\(?:boxed|text|mathrm|mathbf)\s*\{([^{}]*)\}", r"\1", s)
     s = re.sub(r"\\(?:left|right|big|Big)\b", "", s)

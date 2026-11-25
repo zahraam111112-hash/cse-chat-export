@@ -192,24 +192,32 @@ def get_job(job_id: str) -> dict[str, Any] | None:
 def recent_jobs(limit: int = 50, q: str | None = None, status: str | None = None,
                 source: str | None = None, owner: str | None = None) -> list[dict[str, Any]]:
     # The transcripts column holds the titles and every message, so a plain
-    # LIKE over its text finds both. json_extract would be tidier but it
-    # raises on malformed JSON, and one bad row must not blank the table.
+    # LIKE over its text finds both. The json_* functions are the tidier way to
+    # summarise that column, but they raise `malformed JSON` on a torn value —
+    # NULL is fine, any other non-JSON is not — so each one is guarded by
+    # json_valid(). Without the guard a single half-written row fails the whole
+    # query, and this query is the dashboard and the deep health check.
     clause, params = _filters(q, status, source, owner)
     with conn() as c:
         rows = c.execute(
             "SELECT j.id, j.created_at, j.status, j.source, j.urls, j.error,"
-            " json_array_length(j.transcripts) AS conversations,"
-            " (SELECT json_group_array(json_extract(e.value, '$.title'))"
-            "    FROM json_each(j.transcripts) AS e) AS titles"
+            " CASE WHEN json_valid(j.transcripts)"
+            "   THEN json_array_length(j.transcripts) END AS conversations,"
+            " CASE WHEN json_valid(j.transcripts) THEN"
+            "   (SELECT json_group_array(json_extract(e.value, '$.title'))"
+            "      FROM json_each(j.transcripts) AS e) END AS titles"
             " FROM jobs AS j" + clause + " ORDER BY j.created_at DESC LIMIT ?",
             (*params, limit),
         ).fetchall()
     out = []
     for row in rows:
         item = dict(row)
-        item["urls"] = json.loads(item["urls"])
-        # json_* return NULL on no or malformed JSON — SQLite does not raise, so a
-        # half-written transcript must not break the whole list.
+        try:
+            item["urls"] = json.loads(item["urls"])
+        except (TypeError, ValueError):
+            # A torn urls value must not hide the row: it is what the operator
+            # clicks to retry, and the error is worth seeing.
+            item["urls"] = []
         try:
             item["titles"] = [t for t in json.loads(item["titles"]) if t] if item["titles"] else []
         except (TypeError, ValueError):

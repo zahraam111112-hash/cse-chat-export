@@ -762,3 +762,147 @@ def test_bot_rejects_a_stranger_and_serves_an_allowed_chat(monkeypatch):
     bot.handle_update(known, {"message": {"chat": {"id": 7},
                                           "text": "https://chatgpt.com/share/abc"}})
     assert known.documents
+
+
+# --- the four defects of the 2026-11-25 audit --------------------------------
+#
+# Each of these failed on `a750a19` and each is a separate way a single bad or
+# oversized input took down a request thread, a page or a whole job.
+
+def test_docx_survives_a_frac_with_one_argument():
+    # `while re.search(r"\frac\s*\{", s)` never terminated on `\frac{a}`,
+    # which is what a truncated formula looks like — and the caller is a
+    # request thread, so /docx hung for ever holding a worker. The bug is the
+    # hang, not the wording of what comes out: any answer is a good answer.
+    import time
+    from app import math as math_mod
+    started = time.monotonic()
+    assert isinstance(math_mod._pretty(r"\frac{a}"), str)
+    assert time.monotonic() - started < 2, "the loop must stop when a pass changes nothing"
+    # The normal form still has to nest, innermost first.
+    assert math_mod._pretty(r"\frac{\frac{a}{b}}{c}") == "((a)/(b))/(c)"
+
+def test_docx_builds_a_truncated_formula():
+    from app import docx_export
+    html = docx_export.build([Transcript(
+        url=SHARE, title="t",
+        messages=[Message("assistant", "see $$\frac{a}$$ here")])])
+    assert html[:2] == b"PK", "a build that hangs or dies is the bug"
+
+
+def test_a_closed_fence_is_markdown_and_an_open_one_is_escaped():
+    # `FENCE.fullmatch()` accepted a fence nobody closed. Markdown does not
+    # treat that as code, so the body was rendered as live Markdown: a stored
+    # XSS through /api/jobs/{id}/html, which the dashboard puts in innerHTML.
+    from app import math as math_mod
+    closed = "```\n<img src=x onerror=alert(1)>\n```"
+    html = math_mod.to_html(closed)
+    assert "<pre>" in html and "onerror=alert(1)" in html, "code must stay literal"
+
+    open_ = "```" + "\n<img src=x onerror=alert(1)>\n"
+    html = math_mod.to_html(open_)
+    # The tag is text once escaped; what must not survive is a live element.
+    assert "<img" not in html
+    assert "&lt;img" in html
+
+
+def test_an_unterminated_fence_is_escaped_end_to_end(client):
+    # The reported path: the dashboard fetches each message and assigns the
+    # answer with `box.innerHTML = html`.
+    job_id = store.create_job([SHARE])
+    store.update_job(job_id, status="done", transcripts=json.dumps([{
+        "title": "t", "chars": 3,
+        "messages": [{"role": "assistant", "content": "```\n<script>alert(1)</script>\n"}],
+    }]))
+    body = client.get(f"/api/jobs/{job_id}/html/0/0").text
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_one_torn_transcript_does_not_break_the_job_list(client):
+    # json_array_length('not json') raises, and the comment claimed it did
+    # not. The unfiltered list is the dashboard and /healthz?deep=1 — the
+    # existing coverage only ever passed because its `q=` filter hid the row.
+    good = _job_with("healthy row")
+    broken = store.create_job([SHARE])
+    with store.conn() as c:
+        c.execute("UPDATE jobs SET status='done', transcripts='not json' WHERE id=?", (broken,))
+
+    r = client.get("/api/jobs")
+    assert r.status_code == 200, "one torn row must not 500 the whole list"
+    rows = {x["id"]: x for x in r.json()}
+    assert good in rows and broken in rows
+    assert rows[broken]["conversations"] == 0
+    assert rows[broken]["titles"] == []
+
+    # The dashboard and the deep health check read the same query.
+    assert client.get("/").status_code == 200
+    assert client.get("/healthz?deep=1").json() == {"ok": True, "template": True, "db": True}
+
+
+def test_a_torn_urls_value_does_not_hide_the_row(client):
+    # The other half of the same read: `json.loads` on the way out must not
+    # take the row with it — the id is what the operator clicks to retry.
+    broken = store.create_job([SHARE])
+    with store.conn() as c:
+        c.execute("UPDATE jobs SET urls='not json' WHERE id=?", (broken,))
+    rows = client.get("/api/jobs").json()
+    assert [x["id"] for x in rows] == [broken]
+    assert rows[0]["urls"] == []
+    assert rows[0]["status"] == "queued", "a row with no urls is still retryable/visible"
+
+
+def test_bot_splits_a_long_message_without_breaking_its_html(monkeypatch):
+    # `send()` sliced at 3900 characters, which lands inside `&amp;` and
+    # inside `<pre>`. Telegram answers 400 and the job stays 'running'.
+    sent = []
+
+    class Client:
+        def post(self, url, data=None, files=None):
+            text = data.get("text") or ""
+            assert _parseable(text), f"Telegram would reject: {text[:60]!r}"
+            sent.append(text)
+            return _Resp({"ok": True, "result": {"message_id": len(sent)}})
+
+    body = "a <div> & $$\frac{a}{b}$$ " * 600
+    bot.send(Client(), "7", f"<pre>{bot.esc(body[:8000])}</pre>")
+
+    assert len(sent) > 1, "an 8 KB body must arrive in more than one message"
+    assert all(len(s) <= bot.MAX_TEXT for s in sent)
+    assert all(s.startswith("<pre>") and s.endswith("</pre>") for s in sent)
+    # Nothing may be dropped: each piece re-opens and re-closes `<pre>`, which
+    # is the point, so the comparison is of the text inside that markup.
+    inner = "".join(s[len("<pre>"):-len("</pre>")] for s in sent)
+    assert inner == bot.esc(body[:8000]), "no conversation text may be lost"
+
+
+def _parseable(text):
+    """Telegram's rule: only its own tags, properly nested, no bare < or &."""
+    import re
+    tags = {"pre", "code", "b", "strong", "i", "em", "u", "ins", "s", "strike",
+            "del", "a", "tg-spoiler", "span", "blockquote"}
+    tag = re.compile(r"</?([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^<>]*)?>")
+    entity = re.compile(r"&(?:#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);")
+    i, stack = 0, []
+    while i < len(text):
+        if text[i] == "<":
+            m = tag.match(text, i)
+            if not m:
+                return False
+            name = m.group(1).lower()
+            if name not in tags:
+                return False
+            if m.group(0).startswith("</"):
+                if not stack or stack.pop() != name:
+                    return False
+            else:
+                stack.append(name)
+            i = m.end()
+        elif text[i] == "&":
+            m = entity.match(text, i)
+            if not m:
+                return False
+            i = m.end()
+        else:
+            i += 1
+    return not stack
