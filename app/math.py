@@ -265,6 +265,24 @@ def _fence_closed(segment: str) -> bool:
     return len(lines) >= 2 and bool(_FENCE_BARE.match(lines[-1]))
 
 
+_GT_MARKER = re.compile(r"(?m)^((?:[ \t]*(?:&gt;[ \t]?)*)&gt;)")
+
+
+def _escape_text(text: str) -> str:
+    """Escape a message body for Markdown without destroying `>` blocks.
+
+    `html.escape()` turns every `>` into `&gt;`, and Markdown then sees a
+    literal entity where a blockquote marker should be — so a quoted reply
+    renders as the visible text `&gt;` instead of a quote. Markdown only reads
+    `>` as markup where it starts a line (after any quote markers), and it
+    escapes a `>` in running text by itself, so those markers are put back
+    after escaping. `<` and `&` stay escaped: that is what stops a shared
+    conversation from carrying `<script>` or `<img onerror=…>` into the page.
+    """
+    escaped = html_mod.escape(text, quote=False)
+    return _GT_MARKER.sub(lambda m: m.group(1).replace("&gt;", ">"), escaped)
+
+
 def to_html(text: str, render=None) -> str:
     """Interleave rendered text and MathML for the HTML exporters.
 
@@ -288,7 +306,7 @@ def to_html(text: str, render=None) -> str:
             # between somebody's conversation and the dashboard.
             parts.append(
                 seg.text if FENCE.fullmatch(seg.text) and _fence_closed(seg.text)
-                else html_mod.escape(seg.text, quote=False)
+                else _escape_text(seg.text)
             )
             continue
         xml = mathml(seg.text, seg.display)

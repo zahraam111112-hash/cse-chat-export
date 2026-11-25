@@ -200,3 +200,26 @@ def test_the_preview_endpoint_returns_the_same_render(tmp_path, monkeypatch):
     assert "$" not in r.text
     assert client.get(f"/api/jobs/{job_id}/html/0/9").status_code == 404
     assert client.get(f"/api/jobs/{job_id}/html/4/0").status_code == 404
+
+# --- blockquotes survive the escape -----------------------------------------
+
+def test_a_quoted_reply_renders_as_a_blockquote():
+    # Every `>` used to be escaped before Markdown ran, so the marker arrived
+    # as `&gt;` and a quoted reply showed up as the literal text in a <p>.
+    out = mm.to_html("a\n\n> quoted line\n\nend")
+    assert "<blockquote>" in out and "quoted line" in out
+    assert "&gt; quoted" not in out
+
+def test_nested_quotes_keep_their_depth():
+    out = mm.to_html("> a\n> > b")
+    assert out.count("<blockquote>") == 2
+
+def test_a_quote_still_escapes_what_is_inside_it():
+    out = mm.to_html("> <script>alert(1)</script>")
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+def test_a_gt_in_running_text_stays_escaped():
+    # Only a line-leading marker is markup; `a > b` must not become one.
+    out = mm.to_html("a > b")
+    assert "&gt;" in out and "<blockquote>" not in out

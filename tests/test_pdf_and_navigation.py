@@ -145,3 +145,41 @@ def test_a_failing_browser_is_a_503_not_a_500(client, monkeypatch):
     r = client.get(f"/api/jobs/{job_id}/pdf")
     assert r.status_code == 503
     assert "PDF rendering failed" in r.json()["detail"]
+
+
+# --- the bundled-browser override -------------------------------------------
+
+def test_desktop_only_pins_the_bundled_browser_tree_when_one_is_bundled(
+        tmp_path, monkeypatch):
+    """A developer checkout must not be pointed at a browsers folder that only
+    the release has.
+
+    `desktop.py` forces `PLAYWRIGHT_BROWSERS_PATH=0` so a moved release folder
+    finds the Chromium beside it. The same entry point runs from a checkout,
+    where `.local-browsers` does not exist and Playwright would refuse to
+    launch — which is every extraction and every PDF failing in a dev run.
+    """
+    import os
+    import runpy
+
+    from pathlib import Path
+
+    root = tmp_path / "checkout"
+    (root / "windows").mkdir(parents=True)
+    script = root / "windows" / "desktop.py"
+    script.write_text(
+        Path("windows/desktop.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    runpy.run_path(str(script), run_name="not_main")
+    assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") is None, \
+        "a checkout has no bundled Chromium, so the override must stay unset"
+
+    (root / "python").mkdir()
+    (root / "python" / "python.exe").write_bytes(b"")
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    runpy.run_path(str(script), run_name="not_main")
+    assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0", \
+        "a release must find the Chromium beside its interpreter"

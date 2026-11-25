@@ -26,7 +26,15 @@ HOST = "127.0.0.1"
 # at build time). Playwright resolves that folder relative to the interpreter,
 # so an unzipped copy can be moved. A stale value in the caller's environment
 # would otherwise point at %LOCALAPPDATA%, where nothing was installed.
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+#
+# Only the release has that layout. This file also runs from a developer
+# checkout (`start.ps1` falls back to .venv or the system Python), and there
+# the "0" points at a browsers folder that does not exist while the real one
+# sits in %LOCALAPPDATA%\ms-playwright — every extraction died with
+# "Executable doesn't exist at …\.local-browsers\chromium-…" before Chromium
+# launched. So the override is set only when a bundled interpreter is present.
+if os.path.isfile(os.path.join(ROOT, "python", "python.exe")):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
 
 def _data_dir() -> str:
