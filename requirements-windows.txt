@@ -1,0 +1,24 @@
+# What the Windows release installs.
+#
+# Same as requirements.txt except for two things, both of them download size:
+#
+#   * no playwright. The release drives the Chromium the machine already has
+#     (Microsoft Edge is on every Windows 10/11), so the 117 MB Playwright
+#     package and the 700 MB of browsers it would bundle stay out.
+#   * plain uvicorn, not uvicorn[standard]. The extras are the --reload
+#     watcher, a faster HTTP parser and a YAML config loader; this app starts
+#     one server process and reads its config from the environment.
+#
+# websockets is listed explicitly because it used to arrive as a uvicorn extra
+# and the Chrome DevTools Protocol client imports it directly.
+
+fastapi>=0.115
+uvicorn>=0.32
+websockets>=12
+jinja2>=3.1
+python-multipart>=0.0.9
+python-docx>=1.1
+Markdown>=3.6
+latex2mathml>=3.81
+mathml2omml>=0.0.2
+httpx>=0.27

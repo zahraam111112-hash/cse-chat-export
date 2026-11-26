@@ -1,8 +1,7 @@
 ; Inno Setup script for the Windows installer.
 ;
-; The release workflow builds the app into a short path (a bundled Chromium
-; tree gets deep enough to hit MAX_PATH under a long runner path) and passes
-; it in as SourceRoot; the output directory is passed with /O.
+; The release workflow builds the app into a short path and passes it in as
+; SourceRoot; the output directory is passed with /O.
 ;
 ; The result is a per-user installer: no administrator rights, no system-wide
 ; changes, and an uninstaller in Add/Remove Programs.
@@ -28,8 +27,8 @@ OutputBaseFilename=ChatGPT-Share-Exporter-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; Per-user install: the app needs no elevated privileges, and Chromium runs
-; fine unprivileged.
+; Per-user install: the app needs no elevated privileges, and the browser it
+; drives (Edge) starts fine from an unprivileged process.
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

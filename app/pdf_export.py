@@ -14,6 +14,7 @@ import re
 
 import markdown as md
 
+from . import browser
 from . import math as math_mod
 from .extractor import Transcript
 
@@ -103,38 +104,5 @@ def build_html(transcripts: list[Transcript]) -> str:
 
 
 def build(transcripts: list[Transcript], proxy: str | None = None) -> bytes:
-    """Print the rendered HTML to PDF with the Chromium Playwright already uses."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("Playwright is not installed on the server.") from exc
-
-    launch = {"headless": True, "args": ["--no-sandbox"]}
-    if proxy:
-        launch["proxy"] = {"server": proxy}
-
-    page_html = build_html(transcripts)
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(**launch)
-        try:
-            page = browser.new_page()
-            page.set_content(page_html, wait_until="load")
-            # Range requests and print paths need the fonts resolved first;
-            # the markup has no images but a conversation can embed any.
-            return page.pdf(
-                format="A4",
-                print_background=True,
-                margin={"top": "18mm", "bottom": "18mm",
-                        "left": "15mm", "right": "15mm"},
-                display_header_footer=True,
-                header_template="<span></span>",
-                footer_template=(
-                    '<div style="font-size:8px;color:#888;width:100%;'
-                    'padding:0 15mm;display:flex;justify-content:space-between;">'
-                    "<span>ChatGPT Share Exporter</span>"
-                    '<span class="pageNumber"></span>/<span class="totalPages"></span>'
-                    "</div>"
-                ),
-            )
-        finally:
-            browser.close()
+    """Print the rendered HTML to PDF with the same Chromium extraction uses."""
+    return browser.print_pdf(build_html(transcripts), proxy)

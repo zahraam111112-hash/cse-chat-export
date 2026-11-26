@@ -50,7 +50,6 @@ if ($PythonExe -eq $Bundled -or $PythonExe -eq $Venv) { $Isolated = @() } else {
 $AllArgs = @() + $LauncherArgs + $Isolated + @((Join-Path $Here "desktop.py"))
 
 Write-Host "Starting ChatGPT Share Exporter..." -ForegroundColor Cyan
-Write-Host "The first launch can take a few seconds while Chromium is prepared."
 Write-Host ""
 
 try {

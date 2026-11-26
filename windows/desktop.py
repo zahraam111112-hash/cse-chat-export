@@ -22,19 +22,12 @@ if ROOT not in sys.path:
 
 HOST = "127.0.0.1"
 
-# The release bundles Chromium beside the interpreter (PLAYWRIGHT_BROWSERS_PATH=0
-# at build time). Playwright resolves that folder relative to the interpreter,
-# so an unzipped copy can be moved. A stale value in the caller's environment
-# would otherwise point at %LOCALAPPDATA%, where nothing was installed.
-#
-# Only the release has that layout. This file also runs from a developer
-# checkout (`start.ps1` falls back to .venv or the system Python), and there
-# the "0" points at a browsers folder that does not exist while the real one
-# sits in %LOCALAPPDATA%\ms-playwright — every extraction died with
-# "Executable doesn't exist at …\.local-browsers\chromium-…" before Chromium
-# launched. So the override is set only when a bundled interpreter is present.
-if os.path.isfile(os.path.join(ROOT, "python", "python.exe")):
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+# The release used to bundle Chromium and pin Playwright to it with
+# PLAYWRIGHT_BROWSERS_PATH=0. It ships no browser now — `app/browser.py`
+# drives the Chromium the machine already has (Microsoft Edge on Windows) —
+# so that variable has nothing to point at, and a stale value inherited from
+# the caller would only break a Playwright launch.
+os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
 
 
 def _data_dir() -> str:
@@ -101,6 +94,14 @@ def main() -> int:
     threading.Thread(target=_open_when_ready, args=(url, server), daemon=True).start()
     print(f"ChatGPT Share Exporter -> {url}", flush=True)
     print(f"jobs database: {os.environ['CSE_DB']}", flush=True)
+    # The browser is the one thing the app needs from outside itself, and a
+    # missing one only shows up as a failed job — say it at startup instead.
+    try:
+        from app.browser import engine
+
+        print(f"browser: {engine()}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - the dashboard still works
+        print(f"browser: none found — extraction will fail ({exc})", flush=True)
     print("Ctrl+C stops the app.", flush=True)
     try:
         server.run()

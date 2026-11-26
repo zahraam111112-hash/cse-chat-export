@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from . import browser
+
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -327,68 +329,17 @@ def normalize_url(url: str) -> str:
     return f"https://{host}/share/{m.group(2)}"
 
 
-def _settled(page, deadline: float) -> str:
-    """Read the page once it has stopped moving.
-
-    The share page re-navigates while its client bundle hydrates (full load,
-    then a client-side re-render). `page.content()` during one of those raises
-    "Unable to retrieve content because the page is navigating" — the failure
-    users saw. So a failed read is retried rather than propagated, and the
-    page is only accepted once it holds the conversation state, or once two
-    reads agree on its absence (a genuinely expired link).
-    """
-    last, html = None, ""
-    while time.time() < deadline:
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=5_000)
-            html = page.content()
-        except Exception:  # noqa: BLE001 - a navigation in flight is expected
-            last = None
-            page.wait_for_timeout(400)
-            continue
-        if STATE_KEY in html:
-            # The state is only rendered once the server has sent the whole
-            # conversation, so a stable read that has it is final. Waiting for
-            # a second identical read here cost ~1 s on every job.
-            return html
-        if html == last:
-            return html  # two quiet reads without it: treat the page as final
-        last = html
-        page.wait_for_timeout(600)
-    return html
-
-
 def fetch_html(url: str, timeout_ms: int = 90_000, proxy: str | None = None) -> tuple[str, str]:
-    """Render the share page in headless Chromium and return (html, title)."""
+    """Render the share page in headless Chromium and return (html, title).
+
+    The browser itself is `app.browser`'s business: it drives the Chromium the
+    machine already has (Edge on Windows) unless Playwright is installed, and
+    it owns the "has the page stopped moving" loop that used to live here.
+    """
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover
-        raise ExtractError("Playwright is not installed on the server.") from exc
-
-    launch: dict[str, Any] = {"headless": True, "args": ["--no-sandbox"]}
-    if proxy:
-        launch["proxy"] = {"server": proxy}
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(**launch)
-        try:
-            ctx = browser.new_context(locale="en-US", user_agent=UA)
-            page = ctx.new_page()
-            page.route(
-                "**/*",
-                lambda r: r.abort()
-                if r.request.resource_type in ("image", "font", "media")
-                else r.continue_(),
-            )
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            html = _settled(page, time.time() + 40)
-            try:
-                title = page.title()
-            except Exception:  # noqa: BLE001 - title is cosmetic
-                title = ""
-            return html, title
-        finally:
-            browser.close()
+        return browser.render(url, timeout_ms, proxy, UA)
+    except browser.BrowserMissing as exc:
+        raise ExtractError(str(exc)) from exc
 
 
 def extract(url: str, proxy: str | None = None) -> Transcript:

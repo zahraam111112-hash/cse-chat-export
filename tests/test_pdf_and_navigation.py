@@ -41,13 +41,12 @@ def test_a_navigation_in_flight_is_retried_not_raised():
     class Page:
         def __init__(self):
             self.reads = 0
-            self.loads = 0
             self.waits = 0
 
-        def wait_for_load_state(self, state, timeout):
-            self.loads += 1
+        def ready(self):
+            return True
 
-        def wait_for_timeout(self, ms):
+        def sleep(self, ms):
             self.waits += 1
 
         def content(self):
@@ -58,7 +57,7 @@ def test_a_navigation_in_flight_is_retried_not_raised():
 
     import time
 
-    from app.extractor import STATE_KEY, _settled
+    from app.browser import STATE_KEY, _settled
 
     page = Page()
     html = _settled(page, deadline=time.time() + 10)
@@ -71,19 +70,44 @@ def test_the_reader_gives_up_at_the_deadline_instead_of_hanging():
         def __init__(self):
             self.reads = 0
 
-        def wait_for_load_state(self, state, timeout):
-            pass
+        def ready(self):
+            return True
 
-        def wait_for_timeout(self, ms):
+        def sleep(self, ms):
             pass
 
         def content(self):
             self.reads += 1
             raise RuntimeError("Unable to retrieve content because the page is navigating")
 
-    from app.extractor import _settled
+    from app.browser import _settled
 
     assert _settled(Page(), deadline=0) == ""
+
+
+def test_the_reader_returns_the_last_page_when_the_deadline_passes():
+    """A page that never settles must still come back with what it has."""
+    import time
+
+    from app.browser import _settled
+
+    class Page:
+        def __init__(self):
+            self.n = 0
+
+        def ready(self):
+            return True
+
+        def sleep(self, ms):
+            pass
+
+        def content(self):
+            self.n += 1
+            return f"<html>{self.n}</html>"
+
+    page = Page()
+    assert _settled(page, deadline=time.time() + 0.2).startswith("<html>")
+    assert page.n > 1
 
 
 # --- PDF export -------------------------------------------------------------
@@ -149,37 +173,31 @@ def test_a_failing_browser_is_a_503_not_a_500(client, monkeypatch):
 
 # --- the bundled-browser override -------------------------------------------
 
-def test_desktop_only_pins_the_bundled_browser_tree_when_one_is_bundled(
-        tmp_path, monkeypatch):
-    """A developer checkout must not be pointed at a browsers folder that only
-    the release has.
+def test_the_entry_point_never_pins_a_browser_folder(tmp_path, monkeypatch):
+    """The release ships no browser, so nothing may point Playwright at one.
 
-    `desktop.py` forces `PLAYWRIGHT_BROWSERS_PATH=0` so a moved release folder
-    finds the Chromium beside it. The same entry point runs from a checkout,
-    where `.local-browsers` does not exist and Playwright would refuse to
-    launch — which is every extraction and every PDF failing in a dev run.
+    `desktop.py` used to force `PLAYWRIGHT_BROWSERS_PATH=0` so a moved release
+    found the Chromium beside its interpreter. The release no longer carries a
+    browser at all — it drives the Edge already on the machine — and that
+    override now points at a folder that does not exist.
     """
     import os
     import runpy
 
     from pathlib import Path
 
+    # Resolved from this file, not the working directory: pytest is run both
+    # from the app folder and from the repo root above it.
+    source = Path(__file__).resolve().parents[1] / "windows" / "desktop.py"
     root = tmp_path / "checkout"
     (root / "windows").mkdir(parents=True)
     script = root / "windows" / "desktop.py"
-    script.write_text(
-        Path("windows/desktop.py").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    # The old release layout, so the guard is exercised rather than skipped.
+    (root / "python").mkdir()
+    (root / "python" / "python.exe").write_bytes(b"")
 
     monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
     runpy.run_path(str(script), run_name="not_main")
     assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") is None, \
-        "a checkout has no bundled Chromium, so the override must stay unset"
-
-    (root / "python").mkdir()
-    (root / "python" / "python.exe").write_bytes(b"")
-    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
-    runpy.run_path(str(script), run_name="not_main")
-    assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0", \
-        "a release must find the Chromium beside its interpreter"
+        "nothing is bundled, so PLAYWRIGHT_BROWSERS_PATH must stay untouched"
