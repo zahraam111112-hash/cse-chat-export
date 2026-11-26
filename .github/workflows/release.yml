@@ -2,9 +2,16 @@ name: release
 
 # Builds the Windows app from a tag and attaches it to a GitHub Release.
 #
-# Chromium is bundled on purpose. `playwright install` downloads from a CDN
-# that is blocked in some regions, so a release that deferred it to first
-# launch would install but never extract anything.
+# No browser is bundled. Extraction and PDF export drive the Chromium the
+# machine already has — Microsoft Edge ships with Windows 10 and 11 — over the
+# DevTools protocol, so the payload is a Python runtime and a handful of wheels
+# instead of ~700 MB of Chromium plus the 117 MB Playwright driver. That is
+# roughly 14 MB to download instead of 290 MB, and nothing is fetched at
+# install time or on first launch.
+#
+# An earlier build did bundle Chromium: `playwright install` fetches from a CDN
+# that is blocked in some regions, so deferring it to first launch would have
+# installed an app that never extracted anything.
 
 on:
   push:
@@ -27,22 +34,24 @@ jobs:
       - name: Test
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-          python -m playwright install chromium
+          pip install -r requirements-windows.txt pytest
           python -m pytest tests -q
 
       - name: Assemble the app folder
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # A short root on purpose: the bundled Chromium tree is deep enough
-          # that MAX_PATH is reached under D:\a\<repo>\build\...
+          # A short root on purpose: the install folder ends up under
+          # %LOCALAPPDATA%, and a deep runner path on top of it reaches
+          # MAX_PATH.
           $App = "C:\cse-app"
           Remove-Item -Recurse -Force $App -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $App | Out-Null
 
-          Copy-Item app, windows, tests -Destination $App -Recurse
-          Copy-Item run.py, run_bot.py, requirements.txt, README.md, start.cmd -Destination $App
+          # tests/ stays behind: it runs above, and a user's install folder is
+          # no place for it.
+          Copy-Item app, windows -Destination $App -Recurse
+          Copy-Item run.py, run_bot.py, requirements-windows.txt, README.md, start.cmd -Destination $App
 
           # An embeddable interpreter, not a venv. A venv's python.exe is a
           # redirector to the base interpreter it was created from, so it works
@@ -64,12 +73,22 @@ jobs:
 
           Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\get-pip.py"
           & "$Py\python.exe" "$env:TEMP\get-pip.py" --no-warn-script-location
-          & "$Py\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+          & "$Py\python.exe" -m pip install --no-warn-script-location -r requirements-windows.txt
 
-          # PLAYWRIGHT_BROWSERS_PATH=0 puts Chromium inside site-packages, which
-          # is relative to the interpreter, so it travels with the folder.
-          $env:PLAYWRIGHT_BROWSERS_PATH = "0"
-          & "$Py\python.exe" -m playwright install chromium
+          # pip is how the dependencies got here, not something the release
+          # needs: it is ~8 MB of wheels nobody will install from, and Scripts\
+          # holds its entry points. The bytecode caches are rebuilt on first
+          # use. About 4 MB off the download in total.
+          Remove-Item -Recurse -Force "$Py\Scripts" -ErrorAction SilentlyContinue
+          Get-ChildItem "$Py\Lib\site-packages" -Filter "pip*" -Force |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $App -Recurse -Directory -Filter "__pycache__" |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $App -Recurse -File -Filter "*.pyc" |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+          $Mb = [math]::Round(((Get-ChildItem $App -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+          Write-Host "payload: $Mb MB"
 
       - name: Package
         shell: pwsh
@@ -77,7 +96,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           $App = "C:\cse-app"
 
-          Compress-Archive -Path "$App\*" -DestinationPath "ChatGPT-Share-Exporter-Windows.zip"
+          Compress-Archive -Path "$App\*" -DestinationPath "ChatGPT-Share-Exporter-Windows.zip" `
+            -CompressionLevel Optimal
 
           # Inno Setup, not IExpress: IExpress flattens every source directory
           # into one folder, which would destroy python\Lib\site-packages.
@@ -97,6 +117,9 @@ jobs:
             throw "Inno Setup produced no installer"
           }
 
+          Get-ChildItem dist, ChatGPT-Share-Exporter-Windows.zip |
+            ForEach-Object { "{0}: {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
+
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -114,7 +137,12 @@ jobs:
             **Portable:** download `ChatGPT-Share-Exporter-Windows.zip`, unpack it
             anywhere, and run `start.cmd`.
 
-            Chromium is bundled, so nothing is downloaded on first launch. Job
-            history lives in `%LOCALAPPDATA%\ChatGPTShareExporter`, outside the
-            install folder, so installing a newer build keeps it.
+            Extraction and PDF export run in headless Microsoft Edge, which is
+            already part of Windows 10 and 11, so no browser is downloaded at
+            install time or on first launch. Google Chrome is used if Edge is
+            missing; set `CSE_BROWSER` to the full path of another Chromium-based
+            browser to use that instead.
+
+            Job history lives in `%LOCALAPPDATA%\ChatGPTShareExporter`, outside
+            the install folder, so installing a newer build keeps it.
           generate_release_notes: true

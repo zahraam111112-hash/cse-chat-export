@@ -23,10 +23,11 @@ stream as React's tuple wire format:
   ]]]]]}
 ```
 
-`app/extractor.py` renders the page in headless Chromium, locates that entry
-(it appears inline after hydration, or escaped inside the stream chunks before
-it), decodes the tuple table, and walks out `messages[]`. That is the whole
-trick — the decoder is in `decode_tuple()` and `find_state()`.
+`app/browser.py` renders the page in headless Chromium, `app/extractor.py`
+then locates that entry (it appears inline after hydration, or escaped inside
+the stream chunks before it), decodes the tuple table, and walks out
+`messages[]`. That is the whole trick — the decoder is in `decode_tuple()` and
+`find_state()`.
 
 **The entry repeats.** The mobile share build streams progressively larger
 snapshots, so `"conversation-state"` appears 5–7 times per page and the
@@ -43,10 +44,11 @@ identical to a fully expanded manual read.
 
 ```
 app/
-  extractor.py    Playwright fetch + tuple decoder (the core)
+  extractor.py    tuple decoder (the core)
+  browser.py      headless Chromium: page render, PDF print
   store.py        SQLite jobs/users/events
   docx_export.py  Markdown → .docx renderer with RTL support
-  pdf_export.py   Markdown → HTML → PDF, printed by the same Chromium
+  pdf_export.py   Markdown → HTML → PDF, printed by the same browser
   main.py         FastAPI: dashboard, REST API, file downloads
   bot.py          Telegram long-polling bot
   auth.py         optional HTTP Basic auth
@@ -73,9 +75,13 @@ local port.
 There is also a portable build (`ChatGPT-Share-Exporter-Windows.zip`): unpack it
 anywhere and run `start.cmd`.
 
-Python and Chromium are bundled, so nothing is downloaded on first launch. Job
-history lives in `%LOCALAPPDATA%\ChatGPTShareExporter\data`, outside the install
-folder, so installing a newer build keeps it.
+No browser is bundled: extraction and PDF export drive the Microsoft Edge that
+is already part of Windows 10 and 11, so the installer is a few megabytes
+rather than a few hundred and nothing is downloaded on first launch. Google
+Chrome is used if Edge is missing, and `CSE_BROWSER` names another
+Chromium-based executable to use instead — the engine chosen is printed at
+startup. Job history lives in `%LOCALAPPDATA%\ChatGPTShareExporter\data`,
+outside the install folder, so installing a newer build keeps it.
 
 Telegram bot, from the install folder:
 
@@ -87,10 +93,14 @@ python\python.exe -I run_bot.py
 ## Run locally (development)
 
 ```powershell
-python -I -m pip install -r requirements.txt
-python -I -m playwright install chromium
+python -I -m pip install -r requirements-windows.txt
 python -I run.py            # http://127.0.0.1:8099 (local dev)
 ```
+
+Playwright is the alternative backend: when it is installed `app/browser.py`
+prefers it, and otherwise it drives the Edge or Chrome already on the machine
+through the DevTools protocol. `CSE_NO_PLAYWRIGHT=1` forces the installed
+browser, which is how a release failure is reproduced on a developer machine.
 
 Telegram bot:
 
