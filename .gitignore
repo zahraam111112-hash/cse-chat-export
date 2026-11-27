@@ -14,3 +14,6 @@ _*.json
 
 # Local editor/agent state, never part of the project
 .claude/
+
+# The portable build kept beside the checkout (deploy/fetch-latest-release.ps1)
+/dist/
